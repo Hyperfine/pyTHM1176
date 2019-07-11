@@ -149,6 +149,10 @@ class Thm1176(usbtmc.Instrument):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+        # resolve issue of device left hanging to dry and timing out
+        self.device.reset()
+
         self.running = False
         self.stop = False
 
