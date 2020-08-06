@@ -169,8 +169,8 @@ class Thm1176():
         Parse it according to expected format specified by docs.
         :return:
         '''
-        self.write('*IDN?')
-        res = self.read()
+        self.visa_res.write('*IDN?')
+        res = self.visa_res.read()
         id_vals = res.split(',')
         header = {field: val for field, val in zip(self.id_fields, id_vals)}
 
