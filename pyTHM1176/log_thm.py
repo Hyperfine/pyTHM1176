@@ -34,11 +34,12 @@ sys.path.append(os.path.dirname(CURRENT_DIR))
 import time
 import threading
 
-if BACKEND_CHOICE is 'usbtmc':
+if BACKEND_CHOICE == 'usbtmc':
     import usbtmc as backend
-elif BACKEND_CHOICE is 'pyVISA':
+elif BACKEND_CHOICE == 'pyVISA':
     import visa as backend
-    rm=backend.ResourceManager()
+
+    rm = backend.ResourceManager()
 else:
     print("Unknown backend, exiting...")
     sys.exit()
@@ -46,16 +47,17 @@ else:
 import matplotlib.pyplot as plt
 import numpy as np
 
-if BACKEND_CHOICE is 'usbtmc':
+if BACKEND_CHOICE == 'usbtmc':
     import pyTHM1176.api.thm_usbtmc_api as thm_api
-elif BACKEND_CHOICE is 'pyVISA':
+elif BACKEND_CHOICE == 'pyVISA':
     import pyTHM1176.api.thm_visa_api as thm_api
 
 if __name__ == '__main__':
 
     duration = 300
 
-    params = {'block_size': 5, 'period': 1.0 / 20.0, 'range': '0.1T', 'average': 400, 'format': 'INTEGER'}
+    params = {"trigger_type": "periodic", 'block_size': 500, 'period': 1.0 / 2000.0, 'range': '0.1T',
+              'average': 1, 'format': 'INTEGER'}
 
     item_name = ['Bx', 'By', 'Bz', 'Temperature']
     labels = ['Bx', 'By', 'Bz', 'T']
@@ -63,23 +65,22 @@ if __name__ == '__main__':
     to_show = [True, True, True, False]
     output_file = '~/desktop/test.dat'  # You may want to change this to your desired file
 
-    if BACKEND_CHOICE is 'usbtmc':
-        thm = thm_api.Thm1176(backend.list_devices()[0],
-                              **params)  # You may want to ahve a smarter way of fetching the resource name
-    elif BACKEND_CHOICE is 'pyVISA':
-        resource=rm.list_resources()[0]
+    if BACKEND_CHOICE == 'usbtmc':
+        # You may want to have a smarter way of fetching the resource name
+        thm = thm_api.Thm1176(backend.list_devices()[0], **params)
+    elif BACKEND_CHOICE == 'pyVISA':
+        resource = rm.list_resources()[0]
         print("Resource name: {}".format(resource))
-        thm_res=rm.open_resource(resource)
-        thm = thm_api.Thm1176(thm_res,
-                              **params)  # You may want to ahve a smarter way of fetching the resource name
+        thm_res = rm.open_resource(resource)
+        # You may want to have a smarter way of fetching the resource name
+        thm = thm_api.Thm1176(thm_res, **params)
 
     data_stack = []  # list is thread safe
 
-
     # Get device id string and print output. This can be used to check communications are OK
-    device_id=thm.get_id()
+    device_id = thm.get_id()
     for key in thm.id_fields:
-        print('{}: {}'.format(key,device_id[key]))
+        print('{}: {}'.format(key, device_id[key]))
 
     # Start the monitoring thread
     thread = threading.Thread(target=thm.start_acquisition)

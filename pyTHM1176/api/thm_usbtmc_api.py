@@ -36,7 +36,9 @@ Date: 16Apr2018
 import struct
 import inspect
 import usbtmc
+import time
 import numpy as np
+
 
 def _use_numpy_routines(container):
     """Should optimized numpy routines be used to extract the data.
@@ -71,7 +73,6 @@ def parse_ieee_block_header(block):
     # Function copied from pyVISA
     # copyright: 2014 by PyVISA Authors, see AUTHORS for more details.
     # license: MIT, see pyVISA LICENSE for more details.
-
 
     begin = block.find(b'#')
     if begin < 0:
@@ -138,7 +139,7 @@ def from_binary_block(block, offset=0, data_length=None, datatype='f',
 class Thm1176(usbtmc.Instrument):
     ranges = ["0.1T", '0.3T', '1T', '3T']
     trigger_period_bounds = (122e-6, 2.79)
-    base_fetch_cmd = ':FETCh:ARRay:'
+    base_fetch_cmd = {"periodic": ':FETCh:ARRay:', "single": ":FETCh:SCALar:"}
     axes = ['X', 'Y', 'Z']
     field_axes = ['Bx', 'By', 'Bz']
     fetch_kinds = ['Bx', 'By', 'Bz', 'Timestamp',
@@ -152,6 +153,8 @@ class Thm1176(usbtmc.Instrument):
 
         # resolve issue of device left hanging to dry and timing out
         self.device.reset()
+        # need to provide some time for device to reset before proceeding
+        time.sleep(0.5)
 
         self.running = False
         self.stop = False
@@ -190,20 +193,28 @@ class Thm1176(usbtmc.Instrument):
 
         self.write(':SENSe:FLUX:RANGe ' + self.range)
 
-    def set_periodic_trigger(self):
+    def set_trigger(self, trigger_type):
         '''
         Set the probe to run in periodic trigger mode with a given period, continuously
         :param period:
         :return:
         '''
-        if self.trigger_period_bounds[0] <= self.period <= self.trigger_period_bounds[1]:
-            self.write(':TRIGger:SOURce TIMer')
-            self.write(':TRIGger:TIMer {:f}S'.format(self.period))
-            self.write(':TRIG:COUNT {}'.format(self.block_size))
-            self.write(':INIT:CONTINUOUS ON')
+
+        if trigger_type == "periodic":
+            if self.trigger_period_bounds[0] <= self.period <= self.trigger_period_bounds[1]:
+                self.write(':TRIGger:SOURce TIMer')
+                self.write(':TRIGger:TIMer {:f}S'.format(self.period))
+                self.write(':TRIG:COUNT {}'.format(self.block_size))
+                self.write(':INIT:CONTINUOUS ON')
+                return True
+            else:
+                print('Invalid trigger period value.')
+                return False
+        elif trigger_type == "single":
+            self.write(':TRIG:COUNT 1')
+            self.write(':TRIGger:SOURce IMMediate')
             return True
         else:
-            print('Invalid trigger period value.')
             return False
 
     def str_conv(self, input_str, kind):
@@ -301,18 +312,42 @@ class Thm1176(usbtmc.Instrument):
         :param kwargs:
         :return:
         '''
-        keys = kwargs.keys()
+        keys = list(kwargs.keys())
+        trigger_type = kwargs["trigger_type"]
 
-        if 'block_size' in keys:
-            self.block_size = kwargs['block_size']
+        cmd = ''
 
-        if 'period' in keys:
-            if self.trigger_period_bounds[0] <= kwargs['period'] <= self.trigger_period_bounds[1]:
-                self.period = kwargs['period']
-            else:
-                print('Invalid trigger period value.')
-                print('Setting to default...')
-                self.period = self.defaults['period']
+        if trigger_type == "periodic":
+            # This will setup the sensor to acquire continuously with a set time period
+            # Acquisition will be started with the "INITiate" command and data should be fetched on time with "FETCh:ARRay"
+            if 'block_size' in keys:
+                self.block_size = kwargs['block_size']
+
+            if 'period' in keys:
+                if self.trigger_period_bounds[0] <= kwargs['period'] <= self.trigger_period_bounds[1]:
+                    self.period = kwargs['period']
+                else:
+                    print('Invalid trigger period value.')
+                    print('Setting to default...')
+                    self.period = self.defaults['period']
+
+            self.set_trigger("periodic")
+
+            for axis in self.axes:
+                cmd += self.base_fetch_cmd["periodic"] + axis + '? {},{};'.format(self.block_size, self.n_digits)
+
+        elif trigger_type == "single":
+            # This will setup the sensor to acquire a single trigger
+            # Acquisition should be started by "READ" and data obtained via FETCH
+            self.set_trigger("single")
+            self.block_size = 1 # needed for data unpacking
+
+            for axis in self.axes:
+                cmd += self.base_fetch_cmd["single"] + axis + '? {};'.format(self.n_digits)
+
+        else:
+            print("Invalid trigger type! Nothing setup.")
+            return
 
         if 'range' in keys:
             if kwargs['range'] in self.ranges:
@@ -327,16 +362,35 @@ class Thm1176(usbtmc.Instrument):
         self.set_format()
         self.set_range()
         self.set_average()
-        self.set_periodic_trigger()
 
-        cmd = ''
-        for axis in self.axes:
-            cmd += self.base_fetch_cmd + axis + '? {},{};'.format(self.block_size, self.n_digits)
         cmd += ':FETCH:TIMESTAMP?;:FETCH:TEMPERATURE?;*STB?'
         self.fetch_cmd = cmd
 
-    def start_acquisition(self):
+    def make_measurement(self, **kwargs):
+        """
+        To be used for single, one-off acquisition with parameters supplied (may have averaging)
+        :return:
+        """
+        self.setup(**kwargs)
+        self.write(":INIT")
+        time.sleep(0.1)
+        if self.format == 'ASCII':
+            res = self.ask(self.fetch_cmd)
+            self.parse_ascii_responses('fetch', res)
 
+        elif self.format == 'INTEGER':
+            print("INTEGER mode is not working properly right now")
+            self.write(self.fetch_cmd)
+            res = self.read_raw()
+            self.parse_binary_responses('fetch', res)
+
+    def start_acquisition(self):
+        """
+        starts a data acquisition
+        To be used for continuous periodic measurements only
+        The sensor should be set up first, using the setup method
+        :return:
+        """
         self.running = True
         self.stop = False
         self.write(':INIT')
@@ -350,7 +404,11 @@ class Thm1176(usbtmc.Instrument):
         self.running = False
 
     def stop_acquisition(self):
-
+        """
+        To be used for continuous periodic measurements
+        This is the method to stop a continuous acquisition that was started by the start_acquisition method
+        :return:
+        """
         res = self.ask(':ABORT;*STB?')
         print("Stopping acquisition...")
         print("THM1176 status: {}".format(res))
